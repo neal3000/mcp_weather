@@ -13,6 +13,8 @@ import json
 import ipaddress
 import logging
 from typing import Optional, Dict, Any
+from datetime import datetime, timezone
+import pytz
 
 import httpx
 
@@ -267,10 +269,137 @@ class GeolocationService:
             return None
 
 
+class TimeService:
+    def __init__(self):
+        self.geolocation = GeolocationService()
+        self.logger = logging.getLogger(__name__)
+    
+    def _number_to_words(self, num: int) -> str:
+        """Convert numbers to words for time formatting"""
+        ones = ["", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", 
+                "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", 
+                "seventeen", "eighteen", "nineteen"]
+        tens = ["", "", "twenty", "thirty", "forty", "fifty"]
+        
+        if num == 0:
+            return "twelve"
+        elif num < 20:
+            return ones[num]
+        else:
+            ten_digit = num // 10
+            one_digit = num % 10
+            if one_digit == 0:
+                return tens[ten_digit]
+            else:
+                return f"{tens[ten_digit]} {ones[one_digit]}"
+    
+    def _get_month_name(self, month: int) -> str:
+        """Convert month number to name"""
+        months = [
+            "January", "February", "March", "April", "May", "June",
+            "July", "August", "September", "October", "November", "December"
+        ]
+        return months[month - 1]
+    
+    def _get_day_ordinal(self, day: int) -> str:
+        """Convert day number to ordinal (1st, 2nd, 3rd, etc.)"""
+        if 11 <= day <= 13:
+            return f"{day}th"
+        elif day % 10 == 1:
+            return f"{day}st"
+        elif day % 10 == 2:
+            return f"{day}nd"
+        elif day % 10 == 3:
+            return f"{day}rd"
+        else:
+            return f"{day}th"
+    
+    def _format_time_words(self, hour: int, minute: int) -> str:
+        """Format time in words like 'eleven fifty pm'"""
+        # Convert to 12-hour format
+        if hour == 0 or hour == 12:
+            hour_12 = 12
+            period = "am" if hour == 0 else "pm"
+        else:
+            hour_12 = hour % 12
+            period = "am" if hour < 12 else "pm"
+        
+        hour_word = self._number_to_words(hour_12)
+        
+        if minute == 0:
+            return f"{hour_word} {period}"
+        elif minute < 10:
+            minute_word = self._number_to_words(minute)
+            return f"{hour_word} oh {minute_word} {period}"
+        else:
+            minute_word = self._number_to_words(minute)
+            return f"{hour_word} {minute_word} {period}"
+    
+    async def get_current_time_for_location(self, location_name: str = None, client_ip: str = None) -> Dict[str, Any]:
+        """Get current time for a location using IP geolocation or provided location"""
+        self.logger.info("Getting current time for location: %s, IP: %s", location_name, client_ip)
+        
+        # Get location data
+        if location_name:
+            geolocation = await self.geolocation.get_geolocation_from_name(location_name)
+            if not geolocation:
+                raise ValueError(f"Could not find location: {location_name}")
+        else:
+            geolocation = await self.geolocation.get_geolocation_from_ip(client_ip)
+            if not geolocation:
+                # Fallback to UTC
+                self.logger.warning("Using UTC as fallback")
+                geolocation = {
+                    'city': 'Unknown',
+                    'country': 'Unknown',
+                    'timezone': 'UTC'
+                }
+        
+        # Get timezone and current time
+        timezone_str = geolocation.get('timezone', 'UTC')
+        try:
+            tz = pytz.timezone(timezone_str)
+        except Exception as e:
+            self.logger.warning("Invalid timezone %s, using UTC: %s", timezone_str, e)
+            tz = pytz.UTC
+        
+        current_time = datetime.now(tz)
+        
+        # Format the response
+        hour = current_time.hour
+        minute = current_time.minute
+        month = current_time.month
+        day = current_time.day
+        year = current_time.year
+        
+        time_words = self._format_time_words(hour, minute)
+        month_name = self._get_month_name(month)
+        day_ordinal = self._get_day_ordinal(day)
+        
+        location_display = geolocation.get('city', 'Unknown')
+        if geolocation.get('country') and geolocation['country'] != 'Unknown':
+            location_display += f", {geolocation['country']}"
+        
+        spoken_time = f"the current time is {time_words} {month_name} {day_ordinal} in {location_display}"
+        
+        return {
+            'spoken_time': spoken_time,
+            'location': location_display,
+            'timezone': timezone_str,
+            'iso_time': current_time.isoformat(),
+            'hour': hour,
+            'minute': minute,
+            'month': month,
+            'day': day,
+            'year': year
+        }
+
+
 class WeatherService:
     def __init__(self):
         self.base_url = "https://api.open-meteo.com/v1"
         self.geolocation = GeolocationService()
+        self.time_service = TimeService()
         self.logger = logging.getLogger(__name__)
     
     async def get_current_weather(self, latitude: float, longitude: float) -> Optional[Dict[str, Any]]:
@@ -432,8 +561,9 @@ class WeatherService:
         return weather_codes.get(code, "Unknown")
 
 
-# Initialize weather service
+# Initialize services
 weather_service = WeatherService()
+time_service = TimeService()
 
 
 async def get_coordinates(arguments: Dict[str, Any]) -> tuple[float, float, str]:
@@ -543,6 +673,24 @@ async def list_tools() -> list[Tool]:
                 },
                 "required": []
             }
+        ),
+        Tool(
+            name="get_current_time",
+            description="Get current time and date for a location in spoken format. If no location provided, uses IP-based geolocation.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "location_name": {
+                        "type": "string",
+                        "description": "Location name (e.g., 'London, UK', 'New York')"
+                    },
+                    "client_ip": {
+                        "type": "string",
+                        "description": "Client IP address for geolocation (used if no location provided)"
+                    }
+                },
+                "required": []
+            }
         )
     ]
 
@@ -632,6 +780,35 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             return [TextContent(
                 type="text",
                 text=f"Error getting weather forecast: {str(e)}"
+            )]
+
+    elif name == "get_current_time":
+        try:
+            location_name = arguments.get('location_name')
+            client_ip = arguments.get('client_ip')
+            
+            logger.info("Getting current time for location: %s, IP: %s", location_name, client_ip)
+            time_data = await time_service.get_current_time_for_location(location_name, client_ip)
+            
+            text = f"""# Current Time
+
+{time_data['spoken_time'].capitalize()}
+
+*Detailed Information:*
+- **Location**: {time_data['location']}
+- **Timezone**: {time_data['timezone']}
+- **ISO Time**: {time_data['iso_time']}
+- **Date**: {time_data['month']}/{time_data['day']}/{time_data['year']}
+- **Time**: {time_data['hour']:02d}:{time_data['minute']:02d}"""
+            
+            logger.info("Successfully returned current time data")
+            return [TextContent(type="text", text=text)]
+            
+        except Exception as e:
+            logger.error("Error getting current time: %s", e, exc_info=True)
+            return [TextContent(
+                type="text",
+                text=f"Error getting current time: {str(e)}"
             )]
 
     else:
