@@ -273,25 +273,12 @@ class TimeService:
     def __init__(self):
         self.geolocation = GeolocationService()
         self.logger = logging.getLogger(__name__)
-    
-    def _number_to_words(self, num: int) -> str:
-        """Convert numbers to words for time formatting"""
-        ones = ["", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", 
-                "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", 
-                "seventeen", "eighteen", "nineteen"]
-        tens = ["", "", "twenty", "thirty", "forty", "fifty"]
-        
-        if num == 0:
-            return "twelve"
-        elif num < 20:
-            return ones[num]
-        else:
-            ten_digit = num // 10
-            one_digit = num % 10
-            if one_digit == 0:
-                return tens[ten_digit]
-            else:
-                return f"{tens[ten_digit]} {ones[one_digit]}"
+        try:
+            from num2words import num2words
+            self.num2words = num2words
+        except ImportError:
+            self.logger.error("num2words not installed. Please run: pip install num2words")
+            raise
     
     def _get_month_name(self, month: int) -> str:
         """Convert month number to name"""
@@ -302,20 +289,24 @@ class TimeService:
         return months[month - 1]
     
     def _get_day_ordinal(self, day: int) -> str:
-        """Convert day number to ordinal (1st, 2nd, 3rd, etc.)"""
-        if 11 <= day <= 13:
-            return f"{day}th"
-        elif day % 10 == 1:
-            return f"{day}st"
-        elif day % 10 == 2:
-            return f"{day}nd"
-        elif day % 10 == 3:
-            return f"{day}rd"
-        else:
-            return f"{day}th"
+        """Convert day number to ordinal using num2words"""
+        try:
+            return self.num2words(day, to='ordinal')
+        except:
+            # Fallback
+            if 11 <= day <= 13:
+                return f"{day}th"
+            elif day % 10 == 1:
+                return f"{day}st"
+            elif day % 10 == 2:
+                return f"{day}nd"
+            elif day % 10 == 3:
+                return f"{day}rd"
+            else:
+                return f"{day}th"
     
-    def _format_time_words(self, hour: int, minute: int) -> str:
-        """Format time in words like 'eleven fifty pm'"""
+    def _format_time_words(self, hour: int, minute: int, language: str = 'en') -> str:
+        """Format time in words using num2words with language support"""
         # Convert to 12-hour format
         if hour == 0 or hour == 12:
             hour_12 = 12
@@ -324,22 +315,24 @@ class TimeService:
             hour_12 = hour % 12
             period = "am" if hour < 12 else "pm"
         
-        hour_word = self._number_to_words(hour_12)
+        # Convert numbers to words with specified language
+        hour_word = self.num2words(hour_12, lang=language)
         
         if minute == 0:
             return f"{hour_word} {period}"
         elif minute < 10:
-            minute_word = self._number_to_words(minute)
+            minute_word = self.num2words(minute, lang=language)
             return f"{hour_word} oh {minute_word} {period}"
         else:
-            minute_word = self._number_to_words(minute)
+            minute_word = self.num2words(minute, lang=language)
             return f"{hour_word} {minute_word} {period}"
     
-    async def get_current_time_for_location(self, location_name: str = None, client_ip: str = None) -> Dict[str, Any]:
-        """Get current time for a location using IP geolocation or provided location"""
-        self.logger.info("Getting current time for location: %s, IP: %s", location_name, client_ip)
+    async def get_current_time_for_location(self, location_name: str = None, client_ip: str = None, language: str = 'en') -> Dict[str, Any]:
+        """Get current time for a location with language support"""
+        self.logger.info("Getting current time for location: %s, IP: %s, language: %s", 
+                        location_name, client_ip, language)
         
-        # Get location data
+        # Get location data (same as before)
         if location_name:
             geolocation = await self.geolocation.get_geolocation_from_name(location_name)
             if not geolocation:
@@ -347,32 +340,24 @@ class TimeService:
         else:
             geolocation = await self.geolocation.get_geolocation_from_ip(client_ip)
             if not geolocation:
-                # Fallback to UTC
-                self.logger.warning("Using UTC as fallback")
-                geolocation = {
-                    'city': 'Unknown',
-                    'country': 'Unknown',
-                    'timezone': 'UTC'
-                }
+                geolocation = {'city': 'Unknown', 'country': 'Unknown', 'timezone': 'UTC'}
         
-        # Get timezone and current time
+        # Get timezone and current time (same as before)
         timezone_str = geolocation.get('timezone', 'UTC')
         try:
             tz = pytz.timezone(timezone_str)
-        except Exception as e:
-            self.logger.warning("Invalid timezone %s, using UTC: %s", timezone_str, e)
+        except:
             tz = pytz.UTC
         
         current_time = datetime.now(tz)
         
-        # Format the response
+        # Format with language support
         hour = current_time.hour
         minute = current_time.minute
         month = current_time.month
         day = current_time.day
-        year = current_time.year
         
-        time_words = self._format_time_words(hour, minute)
+        time_words = self._format_time_words(hour, minute, language)
         month_name = self._get_month_name(month)
         day_ordinal = self._get_day_ordinal(day)
         
@@ -391,7 +376,7 @@ class TimeService:
             'minute': minute,
             'month': month,
             'day': day,
-            'year': year
+            'year': current_time.year
         }
 
 
