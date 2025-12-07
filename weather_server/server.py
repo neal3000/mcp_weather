@@ -387,7 +387,7 @@ class WeatherService:
         self.time_service = TimeService()
         self.logger = logging.getLogger(__name__)
     
-    async def get_current_weather(self, latitude: float, longitude: float) -> Optional[Dict[str, Any]]:
+    async def get_current_weather(self, latitude: float, longitude: float):
         """Get current weather data for coordinates"""
         self.logger.info("Getting current weather for coordinates: %s, %s", latitude, longitude)
         
@@ -408,13 +408,13 @@ class WeatherService:
                 data = response.json()
                 
                 self.logger.info("Successfully retrieved current weather data")
-                return self._format_current_weather(data)
+                return self._format_current_weather(data),data
                 
         except Exception as e:
             self.logger.error("Error getting current weather: %s", e)
             return None
     
-    async def get_forecast(self, latitude: float, longitude: float, days: int = 3) -> Optional[Dict[str, Any]]:
+    async def get_forecast(self, latitude: float, longitude: float, days: int = 3):
         """Get weather forecast for coordinates"""
         self.logger.info("Getting %s-day forecast for coordinates: %s, %s", days, latitude, longitude)
         
@@ -435,7 +435,7 @@ class WeatherService:
                 data = response.json()
                 
                 self.logger.info("Successfully retrieved %s-day forecast data", days)
-                return self._format_forecast(data)
+                return self._format_forecast(data),data
                 
         except Exception as e:
             self.logger.error("Error getting forecast: %s", e)
@@ -681,7 +681,7 @@ async def list_tools() -> list[Tool]:
 
 
 @app.call_tool()
-async def call_tool(name: str, arguments: dict) -> list[TextContent]:
+async def call_tool(name: str, arguments: dict):
     """Handle tool calls"""
     logger.info("Tool call received - name: %s, arguments: %s", name, arguments)
 
@@ -690,13 +690,10 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             latitude, longitude, location_info = await get_coordinates(arguments)
             
             logger.info("Fetching current weather for %s", location_info)
-            weather_data = await weather_service.get_current_weather(latitude, longitude)
+            weather_data,weather_json = await weather_service.get_current_weather(latitude, longitude)
             if not weather_data:
                 logger.error("Failed to fetch current weather data")
-                return [TextContent(
-                    type="text",
-                    text="Error: Failed to fetch weather data"
-                )]
+                return [TextContent(type="text",text="Error: Failed to fetch weather data")],{"get_current_weather":{"status":500, "message":"Failed to fetch current weather data"}}
             
             # Format the response
             current = weather_data
@@ -717,7 +714,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 *Last Updated*: {current['timestamp']}"""
             
             logger.info("Successfully returned current weather data")
-            return [TextContent(type="text", text=text)]
+            weather_json["status"] = 200
+            return [TextContent(type="text", text=text)],{"get_current_weather":weather_json}
             
         except Exception as e:
             logger.error("Error getting current weather: %s", e, exc_info=True)
@@ -732,13 +730,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             days = min(max(int(arguments.get('days', 3)), 1), 7)  # Clamp between 1-7 days
             
             logger.info("Fetching %s-day forecast for %s", days, location_info)
-            forecast_data = await weather_service.get_forecast(latitude, longitude, days)
+            forecast_datai,forecast_json = await weather_service.get_forecast(latitude, longitude, days)
             if not forecast_data:
                 logger.error("Failed to fetch forecast data")
                 return [TextContent(
                     type="text",
-                    text="Error: Failed to fetch forecast data"
-                )]
+                    text="Error: Failed to fetch forecast data")],{"get_current_weather":{"status":500,"message":"fail"}}
             
             # Format the response
             text = f"# {days}-Day Weather Forecast - {location_info}\n\n"
@@ -758,14 +755,16 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             text += f"*Timezone*: {forecast_data['location']['timezone']}"
             
             logger.info("Successfully returned %s-day forecast data", days)
-            return [TextContent(type="text", text=text)]
+            forecast_json["status"] = 200
+            return [TextContent(type="text", text=text)],{"get_current_weather":forecast_json}
             
         except Exception as e:
             logger.error("Error getting weather forecast: %s", e, exc_info=True)
             return [TextContent(
                 type="text",
                 text=f"Error getting weather forecast: {str(e)}"
-            )]
+            )],{"get_current_weather":{status:500,"message":"fail"}}
+
 
     elif name == "get_current_time":
         try:
@@ -773,7 +772,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             client_ip = arguments.get('client_ip')
             
             logger.info("Getting current time for location: %s, IP: %s", location_name, client_ip)
-            time_data = await time_service.get_current_time_for_location(location_name, client_ip)
+            time_data,time_json = await time_service.get_current_time_for_location(location_name, client_ip)
             
             text = f"""# Current Time
 
@@ -787,21 +786,22 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 - **Time**: {time_data['hour']:02d}:{time_data['minute']:02d}"""
             
             logger.info("Successfully returned current time data")
-            return [TextContent(type="text", text=text)]
+            time_json["status"]=200
+            return [TextContent(type="text", text=text)],{"get_current_time":time_json}
             
         except Exception as e:
             logger.error("Error getting current time: %s", e, exc_info=True)
             return [TextContent(
                 type="text",
                 text=f"Error getting current time: {str(e)}"
-            )]
+            )],{"get_current_time":{"status":500,"message":"fail"}}
 
     else:
         logger.warning("Unknown tool called: %s", name)
         return [TextContent(
             type="text",
             text=f"Unknown tool: {name}"
-        )]
+        )],{}
 
 
 async def run_stdio():
